@@ -2,9 +2,8 @@ pipeline {
   agent any
 
   environment {
-    IMAGE_NAME = "video-approval-app"
-    IMAGE_TAG = "${env.BUILD_NUMBER}"
-    REGISTRY = "your-registry.example.com"
+    AWS_REGION = 'us-east-1' // Use the Region in your ECR URI
+    IMAGE_REPO = '991577602166.dkr.ecr.us-east-1.amazonaws.com/jenkins-k8s'
   }
 
   stages {
@@ -16,35 +15,42 @@ pipeline {
 
     stage('Install') {
       steps {
-        sh 'npm ci || npm install'
+        sh 'npm ci'
       }
     }
 
     stage('Build Image') {
       steps {
-        sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
+        sh '''
+          set -eu
+          IMAGE_URI="${IMAGE_REPO}:${BUILD_NUMBER}"
+          docker build --pull -t "$IMAGE_URI" .
+        '''
       }
     }
 
     stage('Push Image') {
-      when {
-        expression { return env.BRANCH_NAME == 'main' }
-      }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'registry-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
-          sh '''
-            echo "$REG_PASS" | docker login "$REGISTRY" -u "$REG_USER" --password-stdin
-            docker tag "$IMAGE_NAME:$IMAGE_TAG" "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
-            docker push "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
-          '''
-        }
+        sh '''
+          set -eu
+          REGISTRY="${IMAGE_REPO%%/*}"
+          IMAGE_URI="${IMAGE_REPO}:${BUILD_NUMBER}"
+
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$REGISTRY"
+
+          docker push "$IMAGE_URI"
+        '''
       }
     }
   }
 
   post {
     always {
-      sh 'docker logout $REGISTRY || true'
+      sh '''
+        REGISTRY="${IMAGE_REPO%%/*}"
+        docker logout "$REGISTRY" >/dev/null 2>&1 || true
+      '''
     }
   }
 }
